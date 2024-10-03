@@ -2,30 +2,54 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/kudarap/dotagiftx/gokit/log"
+	"github.com/kudarap/dotagiftx/tracing"
 )
 
 // Worker represents worker handling and running tasks.
 type Worker struct {
-	wg     sync.WaitGroup
-	quit   chan struct{}
-	queue  chan Job
-	jobs   []Job
-	closed bool
+	wg       sync.WaitGroup
+	quit     chan struct{}
+	queue    chan Job
+	jobs     []Job
+	closed   bool
+	taskProc *TaskProcessor
 
 	logger log.Logger
+	tracer *tracing.Tracer
+}
+
+// JobID represents identification for a Job.
+type JobID string
+
+// Job provides process and information for the job.
+type Job interface {
+	// String returns job reference or name.
+	String() string
+
+	// Interval returns sleep duration before re-queueing.
+	//
+	// Returning a zero value will consider run-once job
+	// and will NOT be re-queued.
+	Interval() time.Duration
+
+	// Run process the task of the job.
+	//
+	// Recurring Job will not stop when an error occurred.
+	Run(context.Context) error
 }
 
 // New create new instance of a worker with a given jobs.
-func New(jobs ...Job) *Worker {
+func New(tp *TaskProcessor, jobs ...Job) *Worker {
 	w := &Worker{}
 	w.queue = make(chan Job, len(jobs))
 	w.quit = make(chan struct{})
 	w.jobs = jobs
-
+	w.taskProc = tp
 	w.logger = log.Default()
 	return w
 }
@@ -39,7 +63,10 @@ func (w *Worker) SetLogger(l log.Logger) {
 //
 // All assigned jobs will be run concurrently.
 func (w *Worker) Start() {
-	w.logger.Infof("running %d jobs...", len(w.jobs))
+	w.logger.Infof("running task processor...")
+	go w.taskProc.Run(&w.wg)
+
+	w.logger.Infof("running jobs...")
 
 	ctx := context.Background()
 
@@ -51,8 +78,7 @@ func (w *Worker) Start() {
 	// Handles job queueing and termination.
 	for {
 		select {
-		// Waits the running job to finish and stops the
-		// worker and skip all queued jobs.
+		// Waits the running job to finish and stops the worker and skip all queued jobs.
 		case <-w.quit:
 			return
 		case job := <-w.queue:
@@ -61,11 +87,10 @@ func (w *Worker) Start() {
 				continue
 			}
 
-			// Runner will block until its done making it
-			// a single tasking worker.
+			// Runner will block until done making it a single tasking worker.
 			w.runner(ctx, job)
 
-			// Enable this of you want multi-tasking worker.
+			// Enable this of you want multitasking worker.
 			//go w.runner(ctx, job, false)
 		}
 	}
@@ -79,6 +104,13 @@ func (w *Worker) AddJob(j Job) {
 
 // runner process the job and will re-queue them when recurring job.
 func (w *Worker) runner(ctx context.Context, job Job) {
+	if w.tracer != nil {
+		span := w.tracer.StartSpan(fmt.Sprintf("job-%s", job))
+		defer func() {
+			span.End()
+		}()
+	}
+
 	w.logger.Infof("RUNN job:%s", job)
 	w.wg.Add(1)
 
@@ -99,7 +131,7 @@ func (w *Worker) runner(ctx context.Context, job Job) {
 		return
 	}
 
-	// Job that has non-zero interval value means its a recurring job
+	// Job that has non-zero interval value means it's a recurring job
 	// and will be re-queued after its rest duration
 	w.logger.Infof("REST job:%s will re-queue in %s", job, rest)
 	w.queueJob(job, false)
@@ -150,4 +182,8 @@ func (w *Worker) Stop() error {
 // DEPRECATED
 func (w *Worker) RunOnce(j Job) {
 	w.queueJob(j, true)
+}
+
+func (w *Worker) SetTracer(t *tracing.Tracer) {
+	w.tracer = t
 }

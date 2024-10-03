@@ -5,15 +5,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi"
-	"github.com/kudarap/dotagiftx/core"
+	"github.com/go-chi/chi/v5"
+	dgx "github.com/kudarap/dotagiftx"
 	"github.com/sirupsen/logrus"
 )
 
 const (
-	// itemKey use for accessing this item related endpoint like import and item creation.
-	itemKey = "item_key_E3tTNn9y7evBrFhZC8JEhQf27VqgL8"
-
 	itemImportFileType = "text/yaml"
 
 	itemCacheKeyPrefix = "svc_item"
@@ -21,14 +18,14 @@ const (
 )
 
 func handleItemList(
-	svc core.ItemService,
-	trackSvc core.TrackService,
-	cache core.Cache,
+	svc dgx.ItemService,
+	trackSvc dgx.TrackService,
+	cache dgx.Cache,
 	logger *logrus.Logger,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Check for cache hit and render them.
-		cacheKey, noCache := core.CacheKeyFromRequestWithPrefix(r, itemCacheKeyPrefix)
+		cacheKey, noCache := dgx.CacheKeyFromRequestWithPrefix(r, itemCacheKeyPrefix)
 		if !noCache {
 			if hit, _ := cache.Get(cacheKey); hit != "" {
 				respondOK(w, hit)
@@ -36,7 +33,7 @@ func handleItemList(
 			}
 		}
 
-		opts, err := findOptsFromURL(r.URL, &core.Item{})
+		opts, err := findOptsFromURL(r.URL, &dgx.Item{})
 		if err != nil {
 			respondError(w, err)
 			return
@@ -54,7 +51,7 @@ func handleItemList(
 			return
 		}
 		if list == nil {
-			list = []core.Item{}
+			list = []dgx.Item{}
 		}
 
 		o := newDataWithMeta(list, md)
@@ -67,10 +64,10 @@ func handleItemList(
 	}
 }
 
-func handleItemDetail(svc core.ItemService, cache core.Cache, logger *logrus.Logger) http.HandlerFunc {
+func handleItemDetail(svc dgx.ItemService, cache dgx.Cache, logger *logrus.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Check for cache hit and render them.
-		cacheKey, noCache := core.CacheKeyFromRequestWithPrefix(r, itemCacheKeyPrefix)
+		cacheKey, noCache := dgx.CacheKeyFromRequestWithPrefix(r, itemCacheKeyPrefix)
 		if !noCache {
 			if hit, _ := cache.Get(cacheKey); hit != "" {
 				respondOK(w, hit)
@@ -93,14 +90,14 @@ func handleItemDetail(svc core.ItemService, cache core.Cache, logger *logrus.Log
 	}
 }
 
-func handleItemCreate(svc core.ItemService, cache core.Cache) http.HandlerFunc {
+func handleItemCreate(svc dgx.ItemService, cache dgx.Cache, divineKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := isItemKeyValid(r); err != nil {
+		if err := isValidDivineKey(r, divineKey); err != nil {
 			respondError(w, err)
 			return
 		}
 
-		i := new(core.Item)
+		i := new(dgx.Item)
 		if err := parseForm(r, i); err != nil {
 			respondError(w, err)
 			return
@@ -117,9 +114,9 @@ func handleItemCreate(svc core.ItemService, cache core.Cache) http.HandlerFunc {
 	}
 }
 
-func handleItemImport(svc core.ItemService, cache core.Cache) http.HandlerFunc {
+func handleItemImport(svc dgx.ItemService, cache dgx.Cache, divineKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := isItemKeyValid(r); err != nil {
+		if err := isValidDivineKey(r, divineKey); err != nil {
 			respondError(w, err)
 			return
 		}
@@ -149,11 +146,4 @@ func handleItemImport(svc core.ItemService, cache core.Cache) http.HandlerFunc {
 
 		respondOK(w, res)
 	}
-}
-
-func isItemKeyValid(r *http.Request) error {
-	if r.URL.Query().Get("key") == itemKey {
-		return nil
-	}
-	return fmt.Errorf("item key does not exist or invalid")
 }
